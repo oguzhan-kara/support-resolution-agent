@@ -129,8 +129,27 @@ def customer(
         "account_id": account_id,
         "status": status,
         "product_version": product_version,
+        "email_domains": extra.pop("email_domains", ["customer.com"]),
         **extra,
     }
+
+
+def admin_contacts(
+    emails: tuple[str, ...] = ("admin@customer.com",), age_days: int | None = 10
+) -> dict[str, Any]:
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime(2026, 8, 19, 12, 0, tzinfo=timezone.utc)
+    return {
+        "admin_emails": list(emails),
+        "last_updated": None if age_days is None else (now - timedelta(days=age_days)).isoformat(),
+    }
+
+
+def directory(*users: dict[str, Any]) -> list[dict[str, Any]]:
+    return list(users) or [
+        {"email": "jane@customer.com", "active": True, "modules": [], "display_name": "Jane Doe"}
+    ]
 
 
 class FakeCRM:
@@ -138,9 +157,11 @@ class FakeCRM:
         self,
         record: dict[str, Any] | None = None,
         admin_contacts: dict[str, Any] | None = None,
+        directory: list[dict[str, Any]] | None = None,
     ) -> None:
         self.record = record if record is not None else customer()
-        self.admin_contacts = admin_contacts or {}
+        self.admin_contacts = admin_contacts if admin_contacts is not None else {}
+        self.directory = directory if directory is not None else []
         self.fetch_customer_record_calls = 0
 
     def fetch_customer_record(self, account_id: str) -> dict[str, Any]:
@@ -152,6 +173,9 @@ class FakeCRM:
 
     def fetch_admin_contacts(self, account_id: str) -> dict[str, Any]:
         return self.admin_contacts
+
+    def fetch_directory(self, account_id: str) -> list[dict[str, Any]]:
+        return self.directory
 
 
 # --------------------------------------------------------------------------- #

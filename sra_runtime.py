@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -36,6 +37,18 @@ from platform_sdk import (  # internal
     ticketing as _ticketing,
 )
 
+from access_request import (
+    AccountFacts,
+    AdminContactRecord,
+    AutonomyLevel,
+    Decision,
+    DirectoryUser,
+    Policy,
+    authorize,
+    extract_access_request,
+    looks_like_access_request,
+)
+from grant_executor import GrantExecutor, GrantLog, GrantState, GuardPolicy, build_guards
 from telemetry import TicketTrace
 
 log = logging.getLogger("sra")
@@ -113,6 +126,25 @@ class Deps:
     ticketing: Any = field(default_factory=lambda: _ticketing)
     provisioning: Any = field(default_factory=lambda: _provisioning)
     sleep: Callable[[float], None] = time.sleep
+
+
+@dataclass
+class AccessConfig:
+    """
+    Everything the access-request path needs, in one place.
+
+    Autonomy and the kill switch are read here at runtime rather than baked in
+    at deploy time, so both the staged rollout and an emergency stop are config
+    changes. `kill_switch` is a callable for exactly that reason: whatever the
+    deployment uses for runtime configuration can be wired to it, and engaging
+    it never waits for a release.
+    """
+
+    policy: Policy = field(default_factory=Policy)
+    guard_policy: GuardPolicy = field(default_factory=GuardPolicy)
+    grant_log: GrantLog = field(default_factory=GrantLog)
+    kill_switch: Callable[[], bool] = lambda: False
+    clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
 
 
 @dataclass(frozen=True)
@@ -276,8 +308,11 @@ def _tool_result_payload(result: Any, limit: int = 4_000) -> str:
     return json.dumps({"truncated": True, "preview": text[:limit]})
 
 
-def run(ctx: TicketContext, *, deps: Deps | None = None) -> dict:
+def run(
+    ctx: TicketContext, *, deps: Deps | None = None, access: AccessConfig | None = None
+) -> dict:
     deps = deps or Deps()
+    access = access or AccessConfig()
     trace = TicketTrace(ticket_id=ctx.ticket_id)
     tools = build_tools(deps)
 
@@ -286,6 +321,17 @@ def run(ctx: TicketContext, *, deps: Deps | None = None) -> dict:
         # Checked before any model call: a suspended account should not cost us
         # a ticket's worth of tokens to refuse.
         return escalate(ctx, deps, trace, reason="account_not_serviceable")
+
+    # Access requests bypass the research loop entirely. This is a
+    # classification task; giving it eight steps and the full document set is
+    # how a $0.34 mean becomes a $3.90 ticket. Returns None when the ticket is
+    # not an access request, or looked like one but could not be read — both
+    # fall through to the agent that handles these tickets today.
+    handled = handle_access_request(
+        ctx, deps=deps, access=access, customer=customer, trace=trace
+    )
+    if handled is not None:
+        return handled
 
     context_block, meta = load_context(ctx, deps, customer)
     trace.record_context(
@@ -363,6 +409,173 @@ def run(ctx: TicketContext, *, deps: Deps | None = None) -> dict:
         return finish(ctx, trace, outcome, body=decision.body)
 
     return escalate(ctx, deps, trace, reason="max_steps_exceeded")
+
+
+# --------------------------------------------------------------------------- #
+# Access requests
+# --------------------------------------------------------------------------- #
+
+
+def _admin_record(raw: dict, account_id: str) -> AdminContactRecord:
+    """
+    Build the authorization source, preserving the one field that matters.
+
+    `last_updated` is not decoration. This list has a median age of about seven
+    months, so a record's age is the difference between an authorization and a
+    guess. If the CRM cannot say when a record was last touched, the record is
+    unusable, and `authorize()` says so rather than assuming it is current.
+    """
+    stamp = raw.get("last_updated")
+    if isinstance(stamp, str):
+        try:
+            stamp = datetime.fromisoformat(stamp)
+        except ValueError:
+            stamp = None
+    return AdminContactRecord(
+        account_id=account_id,
+        admin_emails=tuple(raw.get("admin_emails") or ()),
+        last_updated=stamp if isinstance(stamp, datetime) else None,
+    )
+
+
+def _directory(rows: list[dict]) -> dict[str, DirectoryUser]:
+    return {
+        str(row["email"]).strip().lower(): DirectoryUser(
+            email=str(row["email"]),
+            active=bool(row.get("active", False)),
+            modules=tuple(row.get("modules") or ()),
+            display_name=str(row.get("display_name") or ""),
+        )
+        for row in rows
+        if row.get("email")
+    }
+
+
+def _confirmation(record, requester: str, admin_age_days: int | None) -> str:
+    """
+    The reply a customer receives after a grant.
+
+    States what changed, who authorized it, and how to reverse it. A confirmation
+    that omits the reversal leaves the customer depending on us to notice our own
+    mistake, and they are far better placed to notice it than we are.
+    """
+    verified = f"verified {admin_age_days} days ago" if admin_age_days is not None else "unverified"
+    return (
+        f"{record.target_email} now has access to the {record.module} module."
+        f"\n\nAuthorized by {requester}, who is listed as an Admin contact for "
+        f"this account ({verified})."
+        f"\n\nIf this was not intended, reply to this ticket and we will revoke "
+        f"it immediately. Reference: {record.idempotency_key[:12]}."
+    )
+
+
+def handle_access_request(
+    ctx: TicketContext,
+    deps: Deps,
+    access: AccessConfig,
+    customer: dict,
+    trace: TicketTrace | None = None,
+) -> dict | None:
+    """
+    Handle an access request, or return None to leave it to the existing agent.
+
+    None is returned in two cases: the ticket is not an access request, and the
+    ticket looked like one but could not be read. Both fall through to the agent
+    that handles these tickets today, so a routing miss degrades to current
+    behaviour rather than to a dropped ticket.
+
+    Note the shape of what follows. One model call reads the ticket; everything
+    after it is deterministic. The model never chooses to grant — it only reports
+    what the ticket says, and `authorize()` decides.
+    """
+    trace = trace or TicketTrace(ticket_id=ctx.ticket_id)
+
+    if not looks_like_access_request(ctx.subject, ctx.body):
+        return None
+
+    request = extract_access_request(
+        deps.llm,
+        ctx.subject,
+        ctx.body,
+        # From ticket metadata and the mail envelope. Never from the body.
+        account_id=ctx.account_id,
+        sender_email=ctx.sender_email,
+    )
+    trace.record_step(step=0, tool_calls=[], output="access_request_extraction")
+
+    if request is None:
+        log.info("ticket %s looked like an access request but could not be read", ctx.ticket_id)
+        return None
+
+    now = access.clock()
+    admin_raw = deps.crm.fetch_admin_contacts(ctx.account_id) or {}
+    admin_record = _admin_record(admin_raw, ctx.account_id)
+
+    result = authorize(
+        request=request,
+        account=AccountFacts(
+            account_id=ctx.account_id,
+            status=str(customer.get("status", "")),
+            email_domains=tuple(customer.get("email_domains") or ()),
+            product_version=str(customer.get("product_version", "")),
+        ),
+        admin_record=admin_record,
+        directory=_directory(deps.crm.fetch_directory(ctx.account_id) or []),
+        policy=access.policy,
+        guards=build_guards(
+            access.grant_log,
+            account_id=ctx.account_id,
+            now=now,
+            policy=access.guard_policy,
+            kill_switch_engaged=access.kill_switch(),
+        ),
+        now=now,
+    )
+
+    trace.record_decision(outcome=str(result.decision), reason=str(result.reason))
+    log.info(
+        json.dumps(
+            {
+                "ticket_id": ctx.ticket_id,
+                "decision": str(result.decision),
+                "reason": str(result.reason),
+                "sensitivity": str(result.sensitivity),
+                "evidence": {k: str(v) for k, v in result.evidence.items()},
+            }
+        )
+    )
+
+    if result.decision is Decision.CLARIFY:
+        deps.ticketing.post_reply(ctx.ticket_id, result.human_summary, close=False)
+        return finish(ctx, trace, "clarify", body=result.human_summary)
+
+    if result.decision in (Decision.ESCALATE, Decision.PREPARE_FOR_APPROVAL):
+        # Escalating well is most of the value here. The note carries the
+        # finished analysis, so a support engineer confirms in seconds instead
+        # of reconstructing the case from the ticket.
+        deps.ticketing.add_note(ctx.ticket_id, f"SRA access request: {result.human_summary}")
+        deps.ticketing.assign_to_queue(ctx.ticket_id, "tier2")
+        return finish(ctx, trace, f"escalated:{result.reason}")
+
+    record = GrantExecutor(
+        provisioning=deps.provisioning, log=access.grant_log, clock=access.clock
+    ).execute(request, ticket_id=ctx.ticket_id)
+
+    if record.state is not GrantState.GRANTED:
+        # Failed or ambiguous. We do not retry, and we do not tell the customer
+        # it worked. An UNKNOWN outcome in particular means our records and the
+        # customer's system may disagree, which a human needs to reconcile.
+        deps.ticketing.add_note(
+            ctx.ticket_id,
+            f"SRA attempted a grant and could not confirm it ({record.state}): "
+            f"{record.error}. Reference {record.idempotency_key}.",
+        )
+        deps.ticketing.assign_to_queue(ctx.ticket_id, "tier2")
+        return finish(ctx, trace, f"escalated:grant_{record.state}")
+
+    body = _confirmation(record, request.requester_email, admin_record.age_days(now))
+    deps.ticketing.post_reply(ctx.ticket_id, body, close=True)
+    return finish(ctx, trace, "resolved:access_granted", body=body)
 
 
 def escalate(ctx: TicketContext, deps: Deps, trace: TicketTrace, reason: str) -> dict:

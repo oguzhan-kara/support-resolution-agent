@@ -49,6 +49,7 @@ crm = SimpleNamespace(
     # across 900 accounts, so a last-updated timestamp exists somewhere;
     # surfacing it through the SDK may be work for another team.
     fetch_admin_contacts=_unavailable("crm.fetch_admin_contacts"),
+    fetch_directory=_unavailable("crm.fetch_directory"),
 )
 
 ticketing = SimpleNamespace(
