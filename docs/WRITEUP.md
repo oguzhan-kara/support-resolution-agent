@@ -129,20 +129,31 @@ Code: `eval_access.py`, `eval_cases_access.py`, and repairs to `eval_harness.py`
 
 ## AI usage disclosure
 
-> **[Oguzhan — edit this section to match what you actually did. It is graded, and a disclosure that does not match your process is worse than a thin one. What follows describes the session that produced this repository.]**
+**Tools.** Claude Opus 5, driven through Claude Code, in a single working session. No other models or agents.
 
-**Tools.** Claude Opus 5 via Claude Code, in a single working session against the provided files. No other models or agents.
+**How the work was actually divided.** I handed the assignment materials to the agent without reading them myself first. It did the line-by-line reading, produced the diagnosis, wrote the design document, and wrote all of the code and tests. I set the standard, challenged what came back, chose between the alternatives it put in front of me, and approved the design before implementation began. This disclosure would be dishonest if it implied I hand-wrote the policy engine. I did not.
 
-**Delegated.** Reading both files line by line and cross-referencing findings to line numbers; drafting the module docstrings and commit messages; generating the adversarial case corpus once I had specified the threat categories; the mechanical TDD loop (write test → run red → implement → run green).
+What I did do is the part I would defend in an interview.
 
-**Kept.** The diagnosis ranking and its justification. The decision to treat admin-record age as a validity condition rather than metadata. The decision that payroll is never auto-granted. Making `authorize()` a pure function. Choosing false-grant count over accuracy as the headline metric. The pushback on the 40% figure. The reframing of the business case from "the queue halves" to "18% gets cheaper, the risky part gets faster." Every threshold in the policy, and the reasoning for each.
+**Where my direction changed the output.** Four interventions, and what each produced:
 
-**Where it was wrong, and how I caught it.**
-1. The first version of the injection test suite was decorative. The `trust_the_model` mutation passed — the impersonation cases named a forged requester who was not an Admin either, so a naive implementation reached the same decision by luck. **Mutation testing caught it, not review.** The fix required both a better case and asserting trusted fields, not just decisions.
-2. An early test asserted the eval harness made no ticketing calls, which was measuring the fake rather than the property. The real property — that the harness *refuses* production clients — is now enforced in code.
-3. A routing test read the wall clock and reported an admin record as 399 days old instead of 400. Fixed by injecting the clock, which is the same principle the design already rested on.
-4. Minor: a `dataclass` field defaulted to a mutable `SimpleNamespace`; caught by the interpreter on first run.
+1. **I rejected the first design.** It was competent and I did not believe it would survive review, so I sent it back against the standard I actually wanted. That second pass produced: splitting the diff into a repair half and an extension half so a reviewer can tell them apart; the "deliberately not changed" section defending the scope; the incident runbook; the retirement procedure; the statistical caveat on the QA sample; and **mutation testing of the evaluation suite itself.** None of that was in the first plan.
 
-**Conclusions that are mine.** All of Part 1's ranking and the statistical caveat on the QA sample. Every disagreement with the stakeholder in Part 2. The autonomy model and its staging. The choice of production metrics in Part 3, particularly approval dwell time as a test of whether human review is real. All of Part 4, including who holds the kill switch.
+2. **I asked whether it had genuinely read both files or was pattern-matching.** That forced a line-referenced evidence table, which became the spine of Part 1 and drew the line between what the code proves and what I merely suspect.
 
-I am accountable for everything here, including anything a model drafted.
+3. **I asked whether any of this would actually run.** The answer reshaped the architecture. The security-critical core now imports nothing outside the standard library, so 194 tests and the full adversarial suite execute in under a second with no clock, no network, and no fixtures. That property became the main argument for the design rather than a convenience.
+
+4. **I chose the depth allocation and the posture toward the stakeholder.** Deep on Parts 2 and 3 and brief elsewhere, because only the access capability is irreversible. And tiered autonomy over the two alternatives it offered — implement-as-asked-with-guardrails, or decline on risk grounds — because building without checking and refusing to build are both failures.
+
+**Where it was wrong, and how that was caught.**
+
+1. The injection test suite was decorative on the first pass. The `trust_the_model` mutation — the stakeholder's request implemented literally — **survived**, because the forged requester in the impersonation cases was not an Admin either, so believing the ticket body changed nothing. Caught by the mutation testing, which exists because of intervention (1). Review would not have found it: the tests looked thorough.
+2. A test asserted the eval harness made no ticketing calls, which measured the fake rather than the property. The real property — that the harness *refuses* production clients — is now enforced in code.
+3. A routing test read the wall clock and reported an admin record as 399 days old instead of 400. Fixed by injecting the clock, which is the principle the design already rested on and had failed to apply to itself.
+4. A `dataclass` field defaulted to a mutable value; the interpreter caught it on the first run.
+
+Item 1 is the one that matters. A mechanism I asked for found a real hole that neither of us had seen, in work that looked finished.
+
+**What I would do differently.** I would read the source material myself before handing it over. Challenging the agent's reading afterwards is a spot-check of its own output, not an independent one, and I was fortunate that its reading held up. And mutation testing should have been in the first plan, not the second — it justified itself within an hour of existing, which suggests it belongs by default on anything with an irreversible action behind it.
+
+**Accountability.** Mine, for all of it. A model drafted most of this; I decided what shipped.
