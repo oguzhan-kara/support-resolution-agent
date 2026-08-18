@@ -2,6 +2,12 @@
 
 Submission for the Principal AI-Native Engineer assignment.
 
+| Deliverable | |
+|---|---|
+| Written response | [`docs/WRITEUP.md`](docs/WRITEUP.md) — also submitted as a Google Doc |
+| Code | this repository |
+| Recorded walkthrough | _[paste Loom link here]_ |
+
 ## Read in this order
 
 1. **[`docs/WRITEUP.md`](docs/WRITEUP.md)** — the written response. Parts 1–4 and the AI usage disclosure.
