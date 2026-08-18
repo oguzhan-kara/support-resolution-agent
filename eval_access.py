@@ -414,7 +414,7 @@ def main() -> None:
 
     print()
     print("=" * 68)
-    print("MUTATION TESTING — each gate disabled in turn; every row must FAIL")
+    print("MUTATION TESTING - each gate disabled in turn; every row must FAIL")
     print("=" * 68)
     print()
     surviving: list[str] = []
