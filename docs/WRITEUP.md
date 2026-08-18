@@ -4,7 +4,7 @@ Oguzhan Kara · 19 August 2026
 
 **Where I went deep and why.** Parts 2 and 3. Every other defect in this system produces a bad reply, which a human reads and corrects. Only the access-request capability produces an irreversible act with no human in the path. Depth belongs where reversibility ends, so the authorization decision and the evaluation that proves it works got the hours, and general answer quality, retrieval architecture, and prompt engineering got a paragraph each. Part 1 is compressed to what the data supports. Part 4 is short because it is a set of commitments, not an essay.
 
-The code is a git history in two halves: four `fix:` commits repairing what I inherited, then four `feat:` commits adding the capability. That split is deliberate — a reviewer can see exactly what is repair and what is extension.
+The code is a git history in two halves: four commits repairing what I inherited (`chore:`/`fix:`), then four `feat:` commits adding the capability. That split is deliberate — a reviewer can see exactly what is repair and what is extension.
 
 ---
 
