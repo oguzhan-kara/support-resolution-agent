@@ -316,6 +316,22 @@ def _domain(email: str) -> str:
     return email.rsplit("@", 1)[-1].strip().lower() if "@" in email else ""
 
 
+def is_listed_admin(requester_email: str, admin_emails: tuple[str, ...]) -> bool:
+    """
+    Whether the requester appears on the account's Admin contact list.
+
+    Split out from `authorize()` so the evaluation suite can disable it and
+    confirm that the suite actually notices. A gate nobody has tried to break is
+    a gate nobody knows works.
+    """
+    return requester_email.strip().lower() in {e.strip().lower() for e in admin_emails}
+
+
+def domain_belongs_to_account(email: str, account_domains: tuple[str, ...]) -> bool:
+    """Exact domain match. A lookalike domain is not a match."""
+    return _domain(email) in {d.strip().lower() for d in account_domains}
+
+
 # --------------------------------------------------------------------------- #
 # The decision
 # --------------------------------------------------------------------------- #
@@ -429,9 +445,8 @@ def authorize(
 
     # 5. Is the requester who they would need to be?
     requester = request.requester_email.strip().lower()
-    admins = {email.strip().lower() for email in admin_record.admin_emails}
 
-    if requester not in admins:
+    if not is_listed_admin(requester, admin_record.admin_emails):
         return _result(
             Decision.ESCALATE,
             ReasonCode.REQUESTER_NOT_ADMIN,
@@ -440,7 +455,7 @@ def authorize(
             requester=requester,
         )
 
-    if _domain(requester) not in {d.strip().lower() for d in account.email_domains}:
+    if not domain_belongs_to_account(requester, account.email_domains):
         # Listed and still wrong: the list is hand-maintained, so an entry can
         # outlive the relationship that justified it.
         return _result(
