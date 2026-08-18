@@ -6,7 +6,7 @@ Submission for the Principal AI-Native Engineer assignment.
 |---|---|
 | Written response | [`docs/WRITEUP.md`](docs/WRITEUP.md) — also submitted as a Google Doc |
 | Code | this repository |
-| Recorded walkthrough | _[paste Loom link here]_ |
+| Recorded walkthrough | [Part 1](https://www.loom.com/share/f69c2c239085442d80b80f5024734120) · [Part 2](https://www.loom.com/share/3762491cb4ea46c2a07f277819e60865) |
 
 ## Read in this order
 
