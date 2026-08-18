@@ -1,6 +1,9 @@
-# SRA Access-Request Capability Implementation Plan
+# SRA Access-Request Capability — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+Written before the code, from `docs/DESIGN.md`. Kept in the repository because the
+order of work is part of the argument: the repairs land before the extension, and
+the pure `authorize()` is built test-first because it is the piece that must not
+be wrong.
 
 **Goal:** Give SRA the ability to grant module access inside customer environments, with the authorization decision made by deterministic, exhaustively testable code rather than by the model.
 
